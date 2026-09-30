@@ -75,12 +75,31 @@ typedef struct ttf_font_desc {
     int ascent;
     int descent;
     lv_lru_t * bitmap_cache;
+    lv_lru_t * metric_cache;   /* caches get_glyph_dsc results — fixed scale per instance */
 } ttf_font_desc_t;
 
 typedef struct ttf_bitmap_cache_key {
     uint32_t unicode_letter;
     lv_coord_t line_height;
 } ttf_bitmap_cache_key_t;
+
+/* Glyph-metric cache: stb_truetype lookups (FindGlyphIndex/GetGlyphBitmapBox/
+ * GetGlyphHMetrics) were re-run for every character on every lv_label_set_text,
+ * costing ~tens of ms per text widget per value change. Cache the computed
+ * metrics per (letter, next) so repeated updates are O(1) regardless of size. */
+#define TTF_METRIC_CACHE_BYTES 8192
+typedef struct ttf_metric_cache_key {
+    uint32_t unicode_letter;
+    uint32_t unicode_letter_next;
+} ttf_metric_cache_key_t;
+typedef struct ttf_metric_cache_val {
+    uint16_t adv_w;
+    uint16_t box_w;
+    uint16_t box_h;
+    int16_t  ofs_x;
+    int16_t  ofs_y;
+    uint8_t  found;
+} ttf_metric_cache_val_t;
 
 static bool ttf_get_glyph_dsc_cb(const lv_font_t * font, lv_font_glyph_dsc_t * dsc_out, uint32_t unicode_letter,
                                  uint32_t unicode_letter_next)
@@ -98,9 +117,39 @@ static bool ttf_get_glyph_dsc_cb(const lv_font_t * font, lv_font_glyph_dsc_t * d
         return true;
     }
     ttf_font_desc_t * dsc = (ttf_font_desc_t *)font->dsc;
+
+    /* Fast path: return cached metrics if we've measured this (letter, next). */
+    ttf_metric_cache_key_t mkey;
+    lv_memset(&mkey, 0, sizeof(mkey)); /*Zero padding*/
+    mkey.unicode_letter = unicode_letter;
+    mkey.unicode_letter_next = unicode_letter_next;
+    if(dsc->metric_cache) {
+        ttf_metric_cache_val_t * cv = NULL;
+        lv_lru_get(dsc->metric_cache, &mkey, sizeof(mkey), (void **)&cv);
+        if(cv) {
+            if(!cv->found) return false;
+            dsc_out->adv_w = cv->adv_w;
+            dsc_out->box_w = cv->box_w;
+            dsc_out->box_h = cv->box_h;
+            dsc_out->ofs_x = cv->ofs_x;
+            dsc_out->ofs_y = cv->ofs_y;
+            dsc_out->bpp = 8;
+            dsc_out->is_placeholder = false;
+            return true;
+        }
+    }
+
     int g1 = stbtt_FindGlyphIndex(&dsc->info, (int)unicode_letter);
     if(g1 == 0) {
-        /* Glyph not found */
+        /* Glyph not found — cache the negative result so we don't keep looking. */
+        if(dsc->metric_cache) {
+            ttf_metric_cache_val_t * nv = lv_mem_alloc(sizeof(*nv));
+            if(nv) {
+                lv_memset(nv, 0, sizeof(*nv));
+                if(LV_LRU_OK != lv_lru_set(dsc->metric_cache, &mkey, sizeof(mkey), nv, sizeof(*nv)))
+                    lv_mem_free(nv);
+            }
+        }
         return false;
     }
     int x1, y1, x2, y2;
@@ -115,15 +164,26 @@ static bool ttf_get_glyph_dsc_cb(const lv_font_t * font, lv_font_glyph_dsc_t * d
     int k = stbtt_GetGlyphKernAdvance(&dsc->info, g1, g2);
     dsc_out->adv_w = (uint16_t)floor((((float)advw + (float)k) * dsc->scale) +
                                      0.5f); /*Horizontal space required by the glyph in [px]*/
-
-    dsc_out->adv_w = (uint16_t)floor((((float)advw + (float)k) * dsc->scale) +
-                                     0.5f); /*Horizontal space required by the glyph in [px]*/
     dsc_out->box_w = (x2 - x1 + 1);         /*width of the bitmap in [px]*/
     dsc_out->box_h = (y2 - y1 + 1);         /*height of the bitmap in [px]*/
     dsc_out->ofs_x = x1;                    /*X offset of the bitmap in [pf]*/
     dsc_out->ofs_y = -y2;                   /*Y offset of the bitmap measured from the as line*/
     dsc_out->bpp = 8;                       /*Bits per pixel: 1/2/4/8*/
     dsc_out->is_placeholder = false;
+
+    if(dsc->metric_cache) {
+        ttf_metric_cache_val_t * nv = lv_mem_alloc(sizeof(*nv));
+        if(nv) {
+            nv->found = 1;
+            nv->adv_w = dsc_out->adv_w;
+            nv->box_w = dsc_out->box_w;
+            nv->box_h = dsc_out->box_h;
+            nv->ofs_x = dsc_out->ofs_x;
+            nv->ofs_y = dsc_out->ofs_y;
+            if(LV_LRU_OK != lv_lru_set(dsc->metric_cache, &mkey, sizeof(mkey), nv, sizeof(*nv)))
+                lv_mem_free(nv);
+        }
+    }
     return true; /*true: glyph found; false: glyph was not found*/
 }
 
@@ -217,6 +277,11 @@ static lv_font_t * lv_tiny_ttf_create(const char * path, const void * data, size
         goto err_after_dsc;
     }
 
+    /* Optional glyph-metric cache. If it can't be created, get_glyph_dsc just
+     * runs uncached (still correct, only slower). */
+    dsc->metric_cache = lv_lru_create(TTF_METRIC_CACHE_BYTES, sizeof(ttf_metric_cache_val_t),
+                                      lv_mem_free, lv_mem_free);
+
     lv_font_t * out_font = (lv_font_t *)TTF_MALLOC(sizeof(lv_font_t));
     if(out_font == NULL) {
         LV_LOG_ERROR("tiny_ttf: out of memory\n");
@@ -230,6 +295,7 @@ static lv_font_t * lv_tiny_ttf_create(const char * path, const void * data, size
     return out_font;
 err_after_bitmap_cache:
     lv_lru_del(dsc->bitmap_cache);
+    if(dsc->metric_cache) lv_lru_del(dsc->metric_cache);
 err_after_dsc:
     TTF_FREE(dsc);
     return NULL;
@@ -276,6 +342,7 @@ void lv_tiny_ttf_destroy(lv_font_t * font)
             }
 #endif
             lv_lru_del(ttf->bitmap_cache);
+            if(ttf->metric_cache) lv_lru_del(ttf->metric_cache);
             TTF_FREE(ttf);
         }
         TTF_FREE(font);
