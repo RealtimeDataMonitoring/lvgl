@@ -2758,7 +2758,12 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo * info, i
     if(ttUSHORT(data, 2 + info->gpos) != 0) return 0;  // Minor version 0
 
     lookupListOffset = ttUSHORT(data, 8 + info->gpos);
-    lookupList = lookupListOffset;
+    /* RDM: the offset is from the start of GPOS (stb upstream: data + offset,
+     * data = font + gpos). Without info->gpos the lookup list was read from
+     * the glyph outlines, and the walk went up to ~400 KB past the font: no
+     * kerning ever, and a cache-error panic whenever the font sat near the
+     * end of PSRAM (bench core dump 2026-10-05, Sora at 0x3c7e76f4). */
+    lookupList = info->gpos + lookupListOffset;
     lookupCount = ttUSHORT(data, lookupList);
 
     for(i = 0; i < lookupCount; ++i) {
