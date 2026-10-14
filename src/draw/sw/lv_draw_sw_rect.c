@@ -114,7 +114,19 @@ static void draw_bg(lv_draw_ctx_t * draw_ctx, const lv_draw_rect_dsc_t * dsc, co
 
     lv_grad_dir_t grad_dir = dsc->bg_grad.dir;
     lv_color_t bg_color    = grad_dir == LV_GRAD_DIR_NONE ? dsc->bg_color : dsc->bg_grad.stops[0].color;
-    if(bg_color.full == dsc->bg_grad.stops[1].color.full) grad_dir = LV_GRAD_DIR_NONE;
+    /*RDM: a gradient is one flat colour only when EVERY stop is that colour. Upstream
+     *compared stop 1 alone (it assumed 2 stops), so a multi-stop gradient that opens
+     *with a flat run (white, white, papaya / green, green, amber, red) drew solid.*/
+    if(grad_dir != LV_GRAD_DIR_NONE) {
+        bool flat = true;
+        for(uint8_t i = 1; i < dsc->bg_grad.stops_count; i++) {
+            if(dsc->bg_grad.stops[i].color.full != bg_color.full) {
+                flat = false;
+                break;
+            }
+        }
+        if(flat) grad_dir = LV_GRAD_DIR_NONE;
+    }
 
     bool mask_any = lv_draw_mask_is_any(&bg_coords);
     lv_draw_sw_blend_dsc_t blend_dsc = {0};
