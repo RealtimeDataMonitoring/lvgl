@@ -290,6 +290,7 @@ lv_res_t lv_img_decoder_built_in_info(lv_img_decoder_t * decoder, const void * s
         lv_fs_file_t f;
         lv_fs_res_t res = lv_fs_open(&f, src, LV_FS_MODE_RD);
         if(res == LV_FS_RES_OK) {
+#if LV_BIG_ENDIAN_SYSTEM
             uint32_t rn;
             res = lv_fs_read(&f, header, sizeof(lv_img_header_t), &rn);
             lv_fs_close(&f);
@@ -297,6 +298,25 @@ lv_res_t lv_img_decoder_built_in_info(lv_img_decoder_t * decoder, const void * s
                 LV_LOG_WARN("Image get info get read file header");
                 return LV_RES_INV;
             }
+#else
+            /*RDM7: the file keeps upstream's 4-byte header (cf 5, always_zero 3,
+             *reserved 2, w 11, h 11 bits, little-endian), which lv_img_header_t
+             *no longer is: unpack it rather than reading the struct.*/
+            uint8_t raw[4];
+            uint32_t rn;
+            res = lv_fs_read(&f, raw, sizeof(raw), &rn);
+            lv_fs_close(&f);
+            if(res != LV_FS_RES_OK || rn != sizeof(raw)) {
+                LV_LOG_WARN("Image get info get read file header");
+                return LV_RES_INV;
+            }
+            uint32_t v = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) | ((uint32_t)raw[2] << 16) |
+                         ((uint32_t)raw[3] << 24);
+            header->cf = v & 0x1F;
+            header->always_zero = (v >> 5) & 0x7;
+            header->w = (v >> 10) & 0x7FF;
+            header->h = (v >> 21) & 0x7FF;
+#endif
         }
 
         if(header->cf < CF_BUILT_IN_FIRST || header->cf > CF_BUILT_IN_LAST) return LV_RES_INV;

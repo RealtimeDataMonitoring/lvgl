@@ -121,18 +121,28 @@ typedef struct {
     uint32_t cf : 5;          /*Color format: See `lv_img_color_format_t`*/
 
 } lv_img_header_t;
+#define LV_IMG_SIZE_MAX 0x7FF   /*RDM7: the widest and tallest picture the header holds*/
 #else
+/*RDM7: width and height take 16 bits each, not upstream 8.3's 11 (2047 at
+ *most), so a picture can be as big as a widget (WIDGET_MAX_SIDE, a 4K
+ *screen's width). The first byte is unchanged: lv_img_src_get_type reads cf
+ *and always_zero there to tell a picture from a file name or a symbol. The
+ *header is two words now; an LVGL ".bin" file keeps its 4-byte header, which
+ *lv_img_decoder_built_in_info unpacks. Set the fields by name, as LVGL and
+ *the image converter's C files do.*/
 typedef struct {
 
     uint32_t cf : 5;          /*Color format: See `lv_img_color_format_t`*/
     uint32_t always_zero : 3; /*It the upper bits of the first byte. Always zero to look like a
                                  non-printable character*/
 
-    uint32_t reserved : 2; /*Reserved to be used later*/
+    uint32_t reserved : 8; /*Reserved to be used later*/
 
-    uint32_t w : 11; /*Width of the image map*/
-    uint32_t h : 11; /*Height of the image map*/
+    uint32_t w : 16; /*Width of the image map*/
+    uint32_t h : 16; /*Height of the image map*/
+    uint32_t reserved_2 : 16; /*RDM7: the rest of the second word*/
 } lv_img_header_t;
+#define LV_IMG_SIZE_MAX 0xFFFF  /*RDM7: the widest and tallest picture the header holds*/
 #endif
 
 /** Image header it is compatible with
