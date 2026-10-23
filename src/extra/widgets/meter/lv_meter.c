@@ -523,6 +523,12 @@ static void draw_ticks_and_labels(lv_obj_t * obj, lv_draw_ctx_t * draw_ctx, cons
                 label_cord.x2 = label_cord.x1 + label_size.x;
                 label_cord.y2 = label_cord.y1 + label_size.y;
 
+                /* RDM7: let the widget draw beside the label first (emboss). */
+                part_draw_dsc.type = LV_METER_DRAW_PART_TICK_LABEL;
+                part_draw_dsc.draw_area = &label_cord;
+                lv_event_send(obj, LV_EVENT_DRAW_PART_BEGIN, &part_draw_dsc);
+                part_draw_dsc.type = LV_METER_DRAW_PART_TICK;
+                part_draw_dsc.draw_area = NULL;
                 lv_draw_label(draw_ctx, part_draw_dsc.label_dsc, &label_cord, part_draw_dsc.text, NULL);
 
                 outer_mask_id = lv_draw_mask_add(&outer_mask, NULL);

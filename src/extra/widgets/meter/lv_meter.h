@@ -114,6 +114,7 @@ typedef enum {
     LV_METER_DRAW_PART_NEEDLE_LINE,     /**< The needle lines*/
     LV_METER_DRAW_PART_NEEDLE_IMG,      /**< The needle images*/
     LV_METER_DRAW_PART_TICK,            /**< The tick lines and labels*/
+    LV_METER_DRAW_PART_TICK_LABEL,      /**< RDM7: sent just before a tick label is drawn, draw_area = its box*/
 } lv_meter_draw_part_type_t;
 
 /**********************
